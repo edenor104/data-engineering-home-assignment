@@ -218,12 +218,11 @@ def write_to_s3(df, output_path):
     Writes a distributed Spark DataFrame to S3 in CSV format with headers.
 
     This approach is scalable and keeps distributed output (one file per partition).
-    For a single CSV output, you'd use .coalesce(1), but it's avoided here for scalability.
 
     :param df: Spark DataFrame.
     :param output_path: S3 URI, e.g., "s3://bucket-name/folder/"
     """
-    df.write.mode("overwrite").option("header", True).csv(output_path)
+    df.write.mode("overwrite").option("header", True).parquet(output_path)
 
 
 def main():
