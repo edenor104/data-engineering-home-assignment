@@ -1,6 +1,4 @@
-# Data Engineering Assignment (PySpark)
-
-Before starting to work on the assignment - please make sure you fork this repository.
+# My Solution for  Data Engineering Assignment (PySpark)
 
 ## Requirements:
 
@@ -18,6 +16,12 @@ You are a Data Engineer in a financial institute. Your task is to calculate and 
 -   Load the file as a DataFrame, Dataset, or RDD and complete the assignment objectives
 -   The result of each question should be saved as a separate file in an S3 Bucket
 
+## My Assumptions:
+-   There may be duplicates in the data.
+-   In real life, there should not be more than one value per stock per day (this should be the natural PK)
+-   It's better to remove missing values than to fill them in—filling a missing day using an adjacent outlier could lead to inaccuracies.
+
+ 
 ## Assumptions:
 
 -   Use only the closing price to determine returns
@@ -68,10 +72,13 @@ You are a Data Engineer in a financial institute. Your task is to calculate and 
     -   STACK_NAME
 -   Use the `create-update-stack.sh` in the repo to to deploy your stack file. A demo stack file is provided in the repo
 
-## Submission
+## AWS Deployment Details:
+-    bucket: data-engineer-assignment-eden
+-    glue db: stock-analysis-db
+-    job name: stock-analysis-job
 
-Please share your Github repo by replying to the email.
-Write us any assumptions you made or additional information you think is relevant.
+
+
 
 ## Evaluation
 
