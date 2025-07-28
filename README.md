@@ -18,7 +18,7 @@ You are a Data Engineer in a financial institute. Your task is to calculate and 
   
 ## Personal Code Additions:
 -   There are two versions of the code: one for local runs (which still saves to S3), and another for the Glue job. The Glue job is preferable for handling larger-scale data in the future.
--   In general, I tried to add more configurable parameters in case different analyses are needed in the future (e.g., a different number of days for Objective 4, or changing how many results to display in the top list).
+-   In general, I tried to add more configurable parameters in case different analyses are needed in the future (i.e., a different number of days for Objective 4, or changing how many results to display in the top list).
 
 
 ## My Assumptions:
