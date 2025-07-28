@@ -1,39 +1,50 @@
-import os
-import boto3
 from pyspark.sql import SparkSession, Window
 from pyspark.sql.functions import col, lag, avg, stddev, to_date
-from dotenv import load_dotenv
-import io
 
 
 def build_spark():
     """
-    Initializes and returns a local SparkSession for stock data analysis.
-
-    :return: A configured SparkSession object.
+    Initializes and returns the SparkSession in AWS Glue environment.
     """
-    spark_session = (
-        SparkSession.builder
-            .appName("Stocks Data Analysis (temp CSV upload)")
-            .master("local[*]")  # Use all available cores
-            .getOrCreate()
-    )
-    return spark_session
+    spark = SparkSession.builder.appName("Stock Analysis Glue Job").getOrCreate()
+    return spark
 
 
-def load_data(spark, path="stocks_data.csv"):
+def load_data(spark, path):
     """
-    Loads stock data from a CSV file into a Spark DataFrame.
+    Loads stock data from S3 into a Spark DataFrame.
 
     :param spark: SparkSession object.
-    :param path: Path to the CSV file. Defaults to "stocks_data.csv".
-    :return: Spark DataFrame containing the stock data.
+    :param path: S3 path to the CSV file (e.g., s3://bucket/key.csv).
+    :return: Spark DataFrame containing parsed stock data.
     """
     df = (
-        spark.read.csv(path, header=True, inferSchema=True)
-            .withColumn("date", to_date("date"))  # ensure it's DateType
+        spark.read.option("header", True).option("inferSchema", True).csv(path)
+            .withColumn("date", to_date("date"))  # ensure correct type
     )
     return df
+
+
+def clean_data(df):
+    """
+    Cleans raw stock data:
+    - Drops nulls in essential columns.
+    - Removes duplicates based on (date, ticker).
+    - Casts numeric columns for consistency.
+
+    :param df: Raw DataFrame.
+    :return: Cleaned DataFrame.
+    """
+    df_cleaned = (
+        df.dropna(subset=["date", "close", "ticker"])
+            .dropDuplicates(["date", "ticker"])
+            .withColumn("close", col("close").cast("double"))
+            .withColumn("open", col("open").cast("double"))
+            .withColumn("high", col("high").cast("double"))
+            .withColumn("low", col("low").cast("double"))
+            .withColumn("volume", col("volume").cast("long"))
+    )
+    return df_cleaned
 
 
 def clean_data(df):
@@ -202,70 +213,47 @@ def compute_top_n_day_returns(df, days=30, top_n=3, include_price_diff=False):
     return top_n_day_returns
 
 
-def save_and_upload_as_csv(df_spark, bucket, s3_key):
+def write_to_s3(df, output_path):
     """
-    Converts a Spark DataFrame to a CSV and uploads it to S3 entirely in memory,
-    using a BytesIO buffer for compatibility with boto3.
+    Writes a distributed Spark DataFrame to S3 in CSV format with headers.
 
-    :param df_spark: Spark DataFrame to export.
-    :param bucket: Name of the S3 bucket to upload to.
-    :param s3_key: Key (file path) within the S3 bucket.
+    This approach is scalable and keeps distributed output (one file per partition).
+    For a single CSV output, you'd use .coalesce(1), but it's avoided here for scalability.
+
+    :param df: Spark DataFrame.
+    :param output_path: S3 URI, e.g., "s3://bucket-name/folder/"
     """
-    # Step 1: Convert Spark DataFrame to Pandas
-    pdf = df_spark.toPandas()  # not ideal on big data!
-
-    # Step 2: Write CSV to an in-memory bytes buffer (encode as UTF-8)
-    csv_buffer = io.BytesIO()
-    pdf.to_csv(csv_buffer, index=False, encoding="utf-8")
-    csv_buffer.seek(0)  # Reset cursor to beginning
-
-    # Step 3: Upload to S3
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        region_name=os.getenv("AWS_DEFAULT_REGION", "eu-central-1"),
-    )
-    # Uploads a single CSV file to S3 using Pandas buffer.
-    # This is simple and clean but not distributed — not suitable for large datasets.
-    # Distributed version could be found in Glue script version.
-    # For scalable writes, use: df_spark.write.csv("s3a://...", header=True)
-    s3.upload_fileobj(csv_buffer, bucket, s3_key)
-
-    print(f"[UPLOAD] Uploaded to s3://{bucket}/{s3_key}")
+    df.write.mode("overwrite").option("header", True).csv(output_path)
 
 
 def main():
-    load_dotenv()
-    bucket = "data-engineer-assignment-eden"
-
     spark = build_spark()
-    df = load_data(spark, "stocks_data.csv")
-    df = clean_data(df)
 
-    # define hyper parameters
+    # S3 inputs and outputs
+    input_path = "s3://data-engineer-assignment-eden/stocks_data.csv"
+    output_prefix = "s3://data-engineer-assignment-eden/outputs"
+
+    # Analysis parameters
     days = 30
     top_n = 3
-    include_price_diff = False  # personal additional check for the final objective
+    include_price_diff = False
 
-    avg_daily_return = compute_avg_daily_return(df)
-    save_and_upload_as_csv(avg_daily_return, bucket, "outputs/avg_daily_return.csv")
+    df = load_data(spark, input_path)
+    cleaned_df = clean_data(df)
 
-    highest_worth_stock = compute_highest_worth_stock(df, top_n=top_n)
-    save_and_upload_as_csv(highest_worth_stock, bucket, "outputs/highest_worth_stock.csv")
+    avg_daily_return_df = compute_avg_daily_return(cleaned_df)
+    write_to_s3(avg_daily_return_df, f"{output_prefix}/avg_daily_return")
 
-    most_volatile_stock = compute_most_volatile_stock(df, top_n=top_n)
-    save_and_upload_as_csv(most_volatile_stock, bucket, "outputs/most_volatile_stock.csv")
+    highest_worth_df = compute_highest_worth_stock(cleaned_df, top_n=top_n)
+    write_to_s3(highest_worth_df, f"{output_prefix}/highest_worth_stock")
 
-    top_n_day_returns = compute_top_n_day_returns(df, days=days, top_n=top_n, include_price_diff=include_price_diff)
+    most_volatile_df = compute_most_volatile_stock(cleaned_df, top_n=top_n)
+    write_to_s3(most_volatile_df, f"{output_prefix}/most_volatile_stock")
 
-    # Dynamically build filename based on function arguments
-    price_diff_suffix = "_with_diff" if include_price_diff else ""
-    s3_key = f"outputs/top_{top_n}_{days}day_returns{price_diff_suffix}.csv"
-
-    save_and_upload_as_csv(top_n_day_returns, bucket, s3_key)
-
-    spark.stop()
+    top_n_day_returns_df = compute_top_n_day_returns(
+        cleaned_df, days=days, top_n=top_n, include_price_diff=include_price_diff
+    )
+    write_to_s3(top_n_day_returns_df, f"{output_prefix}/top_3_30day_returns")
 
 
 if __name__ == "__main__":

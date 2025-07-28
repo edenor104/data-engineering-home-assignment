@@ -1,48 +1,168 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: CloudFormation template to create a Lambda function that prints "Hello, World!".
+Description: Glue job, database, tables, and crawler for stocks data analysis.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the existing S3 bucket containing input and output data
+    Default: data-engineer-assignment-eden
 
 Resources:
-    LambdaExecutionRole:
-        Type: "AWS::IAM::Role"
-        Properties:
-            AssumeRolePolicyDocument:
-                Version: "2012-10-17"
-                Statement:
-                    - Effect: "Allow"
-                      Principal:
-                          Service:
-                              - "lambda.amazonaws.com"
-                      Action: "sts:AssumeRole"
-            Policies:
-                - PolicyName: "LambdaExecutionPolicy"
-                  PolicyDocument:
-                      Version: "2012-10-17"
-                      Statement:
-                          - Effect: "Allow"
-                            Action:
-                                - "logs:CreateLogGroup"
-                                - "logs:CreateLogStream"
-                                - "logs:PutLogEvents"
-                            Resource: "arn:aws:logs:*:*:*"
+  # Glue Database
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput:
+        Name: stock_analysis_db
 
-    HelloWorldLambda:
-        Type: "AWS::Lambda::Function"
-        Properties:
-            FunctionName: "HelloWorldFunction"
-            Handler: "index.handler"
-            Role: !GetAtt LambdaExecutionRole.Arn
-            Runtime: "python3.9"
-            Code:
-                ZipFile: |
-                    def handler(event, context):
-                        print("Hello, World!")
-            Timeout: 30
-            MemorySize: 128
+  # IAM Role for Glue
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: glue-stock-analysis-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GlueS3AthenaAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                  - glue:*
+                  - athena:*
+                  - logs:*
+                Resource: "*"
 
-Outputs:
-    LambdaFunctionName:
-        Description: "Name of the Lambda function created"
-        Value: !Ref HelloWorldLambda
-    LambdaExecutionRoleArn:
-        Description: "ARN of the Lambda execution role"
-        Value: !GetAtt LambdaExecutionRole.Arn
+  # Glue Job
+  GlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: stock-analysis-job
+      Role: !GetAtt GlueJobRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${BucketName}/scripts/stock_analysis_glue.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        --TempDir: !Sub "s3://${BucketName}/temp/"
+        --job-language: python
+      GlueVersion: "3.0"
+      MaxCapacity: 2
+
+  # Glue Tables for Results
+  AvgDailyReturnTable:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: !Ref GlueDatabase
+      CatalogId: !Ref "AWS::AccountId"
+      TableInput:
+        Name: avg_daily_return
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: csv
+        StorageDescriptor:
+          Columns:
+            - Name: Date
+              Type: date
+            - Name: average_return
+              Type: double
+          Location: !Sub "s3://${BucketName}/outputs/avg_daily_return/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters:
+              "field.delim": ","
+
+  HighestWorthStockTable:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: !Ref GlueDatabase
+      CatalogId: !Ref "AWS::AccountId"
+      TableInput:
+        Name: highest_worth_stock
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: csv
+        StorageDescriptor:
+          Columns:
+            - Name: Ticker
+              Type: string
+            - Name: average_worth
+              Type: double
+          Location: !Sub "s3://${BucketName}/outputs/highest_worth_stock/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters:
+              "field.delim": ","
+
+  MostVolatileStockTable:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: !Ref GlueDatabase
+      CatalogId: !Ref "AWS::AccountId"
+      TableInput:
+        Name: most_volatile_stock
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: csv
+        StorageDescriptor:
+          Columns:
+            - Name: Ticker
+              Type: string
+            - Name: standard_deviation
+              Type: double
+          Location: !Sub "s3://${BucketName}/outputs/most_volatile_stock/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters:
+              "field.delim": ","
+
+  Top3ThirtyDayReturnTable:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: !Ref GlueDatabase
+      CatalogId: !Ref "AWS::AccountId"
+      TableInput:
+        Name: top_3_30day_return
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: csv
+        StorageDescriptor:
+          Columns:
+            - Name: Ticker
+              Type: string
+            - Name: Date
+              Type: date
+            - Name: return_30_day
+              Type: double
+          Location: !Sub "s3://${BucketName}/outputs/top_3_30day_return/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters:
+              "field.delim": ","
+
+  # Glue Crawler (Updates Tables if needed)
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: stock-analysis-crawler
+      Role: !GetAtt GlueJobRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${BucketName}/outputs/"
